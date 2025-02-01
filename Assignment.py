@@ -51,7 +51,7 @@ ds = pd.DataFrame({
     'frequency_6months': np.where(treatment_status==1, np.random.choice(values, n_samples), np.nan),
 })
 
-print(ds.head())
+#print(ds.head())
 
 #risk sets
 #select those who have not yet received at the time a patient received treatment (generates a list of all potential pairings)
@@ -78,7 +78,9 @@ treated_id = list(sample_risk_set.keys())[1]  #change index value to get the lis
 
 #creating quantiles
 def create_tercile(column):
-    return pd.qcut(column.dropna(), 3, [0,1,2]) 
+    bins = [0, 3, 6, 9]  # Define bin edges
+    labels = [0, 1, 2]   # Assign tercile labels
+    return pd.cut(column, bins=bins, labels=labels, include_lowest=True)
 
 ds["painB_tercile"] = create_tercile(ds["pain_baseline"])
 ds["urgencyB_tercile"] = create_tercile(ds["urgency_baseline"])
