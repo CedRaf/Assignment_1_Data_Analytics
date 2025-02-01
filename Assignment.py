@@ -5,8 +5,6 @@ from scipy.spatial.distance import mahalanobis
 from scipy.stats import zscore
 from numpy.linalg import inv
 
-
-
 values = np.arange(0, 10)
 
 np.random.seed(50)
@@ -73,10 +71,6 @@ ds[['painT_during', 'urgencyT_during', 'frequencyT_during',
         'painT_6months', 'urgencyT_6months', 'frequency_6months']].clip(lower=0).round()
 
 
-
-
-
-
 def create_tercile(column):
     bins = [0, 3, 6, 9]  # Define bin edges
     labels = [0, 1, 2]   # Assign tercile labels
@@ -91,22 +85,6 @@ ds["urgencyT_tercile"] = create_tercile(ds["urgencyT_during"])
 ds["frequencyT_tercile"] = create_tercile(ds["frequencyT_during"])
 
 
-def create_tercile_binaries(df, column_name):
-    """Create binary variables for each tercile (low, middle, high)."""
-    df[f"{column_name}_tercile_1"] = (df[column_name] == 0).astype(int)
-    df[f"{column_name}_tercile_2"] = (df[column_name] == 1).astype(int)
-    df[f"{column_name}_tercile_3"] = (df[column_name] == 2).astype(int)
-    return df
-
-# Apply the binary terciles for each symptom variable
-ds = create_tercile_binaries(ds, "painB_tercile")
-ds = create_tercile_binaries(ds, "urgencyB_tercile")
-ds = create_tercile_binaries(ds, "frequencyB_tercile")
-ds = create_tercile_binaries(ds, "painT_tercile")
-ds = create_tercile_binaries(ds, "urgencyT_tercile")
-ds = create_tercile_binaries(ds, "frequencyT_tercile")
-
-
 selected_columns = [
     'id', 'pain_baseline', 'urgency_baseline', 'frequency_baseline',
     'painT_during', 'urgencyT_during', 'frequencyT_during',
@@ -117,7 +95,7 @@ selected_columns = [
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
-print(ds[selected_columns].head(10))
+#print(ds[selected_columns].head(10))
 
 def risk_set(ds):
     """Create risk sets of untreated patients for each treated patient."""
@@ -150,18 +128,36 @@ def match_patients(treated, risk_set, tercile_columns):
     treated_terciles = treated[tercile_columns].values.reshape(1, -1)
 
     # Compute Mahalanobis distance for each control in the risk set
-    cov_matrix = np.cov(risk_set[tercile_columns].T)  # Covariance matrix
-    inv_cov_matrix = inv(cov_matrix)  # Inverse covariance
+    clean_data = risk_set[tercile_columns].dropna().astype(float) 
+    
+    # Remove columns with zero variance (if any)
+    clean_data = clean_data.loc[:, clean_data.var() > 0]
+    
+    if clean_data.shape[1] < len(tercile_columns):  # If columns were dropped
+        print("Warning: Some columns with zero variance were dropped.")
+
+    try:
+        cov_matrix = np.cov(clean_data.T)  # Covariance matrix
+        inv_cov_matrix = inv(cov_matrix)  # Inverse covariance
+    except np.linalg.LinAlgError:
+        print("Singular covariance matrix encountered. Cannot invert.")
+        return None
 
     # Calculate distances for each control
     distances = risk_set.apply(
-        lambda row: mahalanobis(row[tercile_columns].values, treated_terciles, inv_cov_matrix), 
+        lambda row: mahalanobis(row[tercile_columns].values.flatten(), treated_terciles.flatten(), inv_cov_matrix),
         axis=1
     )
 
     # Select the closest match
-    best_match = risk_set.iloc[distances.idxmin()]
-    return best_match
+    distances_cleaned = distances.dropna()  # Drop NaNs to avoid issues with idxmin
+    if not distances_cleaned.empty:
+        best_match_idx = distances_cleaned.idxmin()  # Use cleaned distances for idxmin
+        best_match = risk_set.loc[best_match_idx]  # Select the best match by index
+        return best_match
+    else:
+        print("No valid matches found")
+        return None
 
 
 
@@ -181,23 +177,10 @@ for treated_id, risk in risk_sets.items():
     matched_control = match_patients(treated_patient, risk, tercile_columns)
     matched_pairs[treated_id] = matched_control
 
+# Print each matched pair in a more readable format
+for treated_id, matched_control in matched_pairs.items():
+    print(f"Treated ID: {treated_id}")
+    print(matched_control)
+    print("-" * 50)  # Separator between each matched pair
 
 
-
-def print_risk_sets(risk_sets):
-    for treated_id, controls in risk_sets.items():
-        print(f"Treated Patient ID: {treated_id}")
-        
-        # Print only the 'id' column of the controls risk set
-        control_ids = controls['id'] if not controls.empty else []
-        print("Risk Set (Control IDs):")
-        print(control_ids)
-        
-        print("\n" + "-"*50 + "\n")
-
-
-# Assuming you've called risk_set(ds) to generate the risk_sets
-risk_sets = risk_set(ds)
-
-# Print the risk sets
-print_risk_sets(risk_sets)
