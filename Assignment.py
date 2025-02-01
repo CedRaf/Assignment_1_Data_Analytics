@@ -3,6 +3,9 @@ import pandas as pd
 from dateutil.relativedelta import relativedelta
 from scipy.spatial.distance import mahalanobis
 from scipy.stats import zscore
+from numpy.linalg import inv
+
+
 
 values = np.arange(0, 10)
 
@@ -40,18 +43,18 @@ ds = pd.DataFrame({
     'treatment_time': treatment_time,
 
     # Baseline values (random normal distribution)
-    'pain_baseline': np.round(np.random.normal(5, 3, n_samples)),
-    'urgency_baseline': np.round(np.random.normal(5, 2, n_samples)),
-    'frequency_baseline': np.round(np.random.normal(3, 2, n_samples)),
+    'pain_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 0, 9),
+    'urgency_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 0, 9),
+    'frequency_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 0, 9)
 })
 
 # Ensure all baseline values are non-negative
 ds[['pain_baseline', 'urgency_baseline', 'frequency_baseline']] = ds[['pain_baseline', 'urgency_baseline', 'frequency_baseline']].clip(lower=0)
 
 # Apply the decreasing pattern where values drop over time
-ds['painT_during'] = np.where(ds['treatment_status'] == 1, ds['pain_baseline'] * np.random.uniform(0.7, 0.9, n_samples), np.nan)
-ds['urgencyT_during'] = np.where(ds['treatment_status'] == 1, ds['urgency_baseline'] * np.random.uniform(0.7, 0.9, n_samples), np.nan)
-ds['frequencyT_during'] = np.where(ds['treatment_status'] == 1, ds['frequency_baseline'] * np.random.uniform(0.7, 0.9, n_samples), np.nan)
+ds['painT_during'] =  ds['pain_baseline'] * np.random.uniform(0.7, 0.9, n_samples)
+ds['urgencyT_during'] = ds['urgency_baseline'] * np.random.uniform(0.7, 0.9, n_samples)
+ds['frequencyT_during'] =  ds['frequency_baseline'] * np.random.uniform(0.7, 0.9, n_samples)
 
 ds['painT_3months'] = np.where(ds['treatment_status'] == 1, ds['painT_during'] * np.random.uniform(0.7, 0.9, n_samples), np.nan)
 ds['urgencyT_3months'] = np.where(ds['treatment_status'] == 1, ds['urgencyT_during'] * np.random.uniform(0.7, 0.9, n_samples), np.nan)
@@ -70,23 +73,16 @@ ds[['painT_during', 'urgencyT_during', 'frequencyT_during',
         'painT_6months', 'urgencyT_6months', 'frequency_6months']].clip(lower=0).round()
 
 
-selected_columns = [
-    'id',
-    'pain_baseline', 'urgency_baseline', 'frequency_baseline',
-    'painT_during', 'urgencyT_during', 'frequencyT_during',
-    'painT_3months', 'urgencyT_3months', 'frequency_3months',
-    'painT_6months', 'urgencyT_6months', 'frequency_6months'
-]
 
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', None)
-#print(ds[selected_columns].head(10))
 
-# Create binary variables for terciles
+
+
 def create_tercile(column):
-    return pd.qcut(column.dropna(), 3, [0, 1, 2])
+    bins = [0, 3, 6, 9]  # Define bin edges
+    labels = [0, 1, 2]   # Assign tercile labels
+    return pd.cut(column, bins=bins, labels=labels, include_lowest=True)
 
-# Apply terciles for baseline and treatment symptom variables
+# Apply terciles for each symptom variable first
 ds["painB_tercile"] = create_tercile(ds["pain_baseline"])
 ds["urgencyB_tercile"] = create_tercile(ds["urgency_baseline"])
 ds["frequencyB_tercile"] = create_tercile(ds["frequency_baseline"])
@@ -94,7 +90,7 @@ ds["painT_tercile"] = create_tercile(ds["painT_during"])
 ds["urgencyT_tercile"] = create_tercile(ds["urgencyT_during"])
 ds["frequencyT_tercile"] = create_tercile(ds["frequencyT_during"])
 
-# Step 2: Create binary variables for each tercile
+
 def create_tercile_binaries(df, column_name):
     """Create binary variables for each tercile (low, middle, high)."""
     df[f"{column_name}_tercile_1"] = (df[column_name] == 0).astype(int)
@@ -102,107 +98,106 @@ def create_tercile_binaries(df, column_name):
     df[f"{column_name}_tercile_3"] = (df[column_name] == 2).astype(int)
     return df
 
-# Apply binary columns for each tercile group
-ds = create_tercile_binaries(ds, "pain_baseline")
-ds = create_tercile_binaries(ds, "urgency_baseline")
-ds = create_tercile_binaries(ds, "frequency_baseline")
-ds = create_tercile_binaries(ds, "painT_during")
-ds = create_tercile_binaries(ds, "urgencyT_during")
-ds = create_tercile_binaries(ds, "frequencyT_during")
+# Apply the binary terciles for each symptom variable
+ds = create_tercile_binaries(ds, "painB_tercile")
+ds = create_tercile_binaries(ds, "urgencyB_tercile")
+ds = create_tercile_binaries(ds, "frequencyB_tercile")
+ds = create_tercile_binaries(ds, "painT_tercile")
+ds = create_tercile_binaries(ds, "urgencyT_tercile")
+ds = create_tercile_binaries(ds, "frequencyT_tercile")
 
-# Step 3: Define the risk set based on tercile balance
-def balanced_risk_set(treated_patient, ds):
-    """Generate a risk set for the treated patient, considering tercile balancing and treatment date."""
-    # Get the tercile of the treated patient for each symptom variable
-    treated_terciles = {
-        "painB_tercile": treated_patient["painB_tercile"],
-        "urgencyB_tercile": treated_patient["urgencyB_tercile"],
-        "frequencyB_tercile": treated_patient["frequencyB_tercile"],
-        "painT_tercile": treated_patient["painT_tercile"],
-        "urgencyT_tercile": treated_patient["urgencyT_tercile"],
-        "frequencyT_tercile": treated_patient["frequencyT_tercile"]
-    }
 
-    # Get the treatment time of the treated patient
-    treatment_time = treated_patient["treatment_time"]
+selected_columns = [
+    'id', 'pain_baseline', 'urgency_baseline', 'frequency_baseline',
+    'painT_during', 'urgencyT_during', 'frequencyT_during',
+    'painB_tercile', 'urgencyB_tercile', 'frequencyB_tercile',
+    'painT_tercile', 'urgencyT_tercile', 'frequencyT_tercile'
+]
 
-    # Filter out controls (those with treatment time later than the treated patient)
-    controls = ds[(ds["treatment_time"] > treatment_time) | (ds["treatment_status"]==0)]
-    
-    # Filter the controls based on tercile matching
-    for key, value in treated_terciles.items():
-        controls = controls[controls[key] == value]
 
-    # Apply date check: Only include controls where admitted_date <= treatment_time
-    controls = controls[controls["admitted_date"] <= treatment_time]
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
+print(ds[selected_columns].head(10))
 
-    return controls
-
-def risk_set(treated_patient, ds):
+def risk_set(ds):
+    """Create risk sets of untreated patients for each treated patient."""
     risk_sets = {}
-    treated_patients = ds[ds["treatment_status"]==1]
 
+    # Identify treated patients
+    treated_patients = ds[ds["treatment_status"] == 1]
+
+    # Iterate through each treated patient
     for _, treated in treated_patients.iterrows():
         treated_id = treated["id"]
         treatment_time = treated["treatment_time"]
 
-        controls = ds[(ds["treatment_time"] > treatment_time) | (ds["treatment_status"]==0)]
+        # Step 1: Define the Risk Set (all untreated patients up to time T)
+        controls = ds[
+            (ds["treatment_status"] == 0) | (ds["treatment_time"] > treatment_time)
+        ]
         controls = controls[controls["admitted_date"] <= treatment_time]
 
+        # Step 2: Store risk set (no filtering on terciles yet)
         risk_sets[treated_id] = controls
 
     return risk_sets
 
-#Difference from original, og code performed risk set on all treated patients at once, mine does it on the parametered patient and is called multiple times
 
-# Step 4: Calculate the Mahalanobis distance
-def mahalanobis_distance(treated_row, control_row, inv_cov_matrix):
-    """Calculate Mahalanobis distance between treated and control patient."""
-    treated_vector = treated_row[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]]
-    control_vector = control_row[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]]
+def match_patients(treated, risk_set, tercile_columns):
+    """Find the best match for a treated patient using Mahalanobis distance and balanced terciles."""
     
-    return mahalanobis(treated_vector, control_vector, inv_cov_matrix)
+    # Extract treated patient's tercile values
+    treated_terciles = treated[tercile_columns].values.reshape(1, -1)
 
-# Step 5: Matching function
-def find_best_match(treated_row, risk_set, inv_cov_matrix):
-    """Find the best match for the treated patient from the risk set."""
-    if not risk_set.empty:
-        distances = risk_set.apply(lambda row: mahalanobis_distance(treated_row, row, inv_cov_matrix), axis=1)
-        best_match = risk_set.iloc[distances.idxmin()]
-        return best_match
-    else:
-        return None
+    # Compute Mahalanobis distance for each control in the risk set
+    cov_matrix = np.cov(risk_set[tercile_columns].T)  # Covariance matrix
+    inv_cov_matrix = inv(cov_matrix)  # Inverse covariance
 
-# Step 6: Covariance matrix and inverse covariance matrix
-# Standardize the variables before calculating the covariance matrix
-#ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]] = ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]].dropna().apply(zscore)
+    # Calculate distances for each control
+    distances = risk_set.apply(
+        lambda row: mahalanobis(row[tercile_columns].values, treated_terciles, inv_cov_matrix), 
+        axis=1
+    )
 
-cov_matrix = np.cov(ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]].dropna(), rowvar=False)
-if np.linalg.det(cov_matrix) == 0:
-    print("Covariance matrix is singular, cannot calculate inverse.")
-else:
-    inv_cov_matrix = np.linalg.inv(cov_matrix)
-
-# Example: Find a match for a treated patient
-treated_patient = ds[ds["treatment_status"] == 1].iloc[5]  # Choose the first treated patient
-risk_set_for_treated = risk_set(treated_patient, ds)
-#best_control_match = find_best_match(treated_patient, risk_set_for_treated, inv_cov_matrix)
-
-first_key = list(risk_set_for_treated.keys())[0]  # Get the first key
-df = risk_set_for_treated[first_key]  # Extract the DataFrame
-print(df[["pain_baseline", "painB_tercile", "urgency_baseline", "urgencyB_tercile", "frequency_baseline", "frequencyB_tercile"]].head())
+    # Select the closest match
+    best_match = risk_set.iloc[distances.idxmin()]
+    return best_match
 
 
 
-# treated_patients = ds[ds['treatment_status'] == 1][['id', 'age', 'treatment_status']]
-# print(treated_patients)
-# untreated_patients = ds[ds['treatment_status'] == 0][['id', 'age', 'treatment_status']]
-# print(untreated_patients)
+# Define tercile-based binary variable columns
+tercile_columns = [
+    "painB_tercile", "urgencyB_tercile", "frequencyB_tercile",
+    "painT_tercile", "urgencyT_tercile", "frequencyT_tercile"
+]
+
+# Get risk sets
+risk_sets = risk_set(ds)
+
+# Match each treated patient with a control
+matched_pairs = {}
+for treated_id, risk in risk_sets.items():
+    treated_patient = ds.loc[ds["id"] == treated_id].iloc[0]
+    matched_control = match_patients(treated_patient, risk, tercile_columns)
+    matched_pairs[treated_id] = matched_control
 
 
-# Print the matched control patient
-#if best_control_match is not None:
-    #print("Matched Control Patient:")
-    #print(best_control_match)
-#else:
-    #print(f"No suitable control found for treated patient {treated_patient['id']}")
+
+
+def print_risk_sets(risk_sets):
+    for treated_id, controls in risk_sets.items():
+        print(f"Treated Patient ID: {treated_id}")
+        
+        # Print only the 'id' column of the controls risk set
+        control_ids = controls['id'] if not controls.empty else []
+        print("Risk Set (Control IDs):")
+        print(control_ids)
+        
+        print("\n" + "-"*50 + "\n")
+
+
+# Assuming you've called risk_set(ds) to generate the risk_sets
+risk_sets = risk_set(ds)
+
+# Print the risk sets
+print_risk_sets(risk_sets)
