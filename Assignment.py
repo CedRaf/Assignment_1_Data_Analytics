@@ -138,7 +138,6 @@ def balanced_risk_set(treated_patient, ds):
 
     return controls
 
-
 def risk_set(treated_patient, ds):
     risk_sets = {}
     treated_patients = ds[ds["treatment_status"]==1]
@@ -176,7 +175,7 @@ def find_best_match(treated_row, risk_set, inv_cov_matrix):
 
 # Step 6: Covariance matrix and inverse covariance matrix
 # Standardize the variables before calculating the covariance matrix
-ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]] = ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]].dropna().apply(zscore)
+#ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]] = ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]].dropna().apply(zscore)
 
 cov_matrix = np.cov(ds[["pain_baseline", "urgency_baseline", "frequency_baseline", "painT_during", "urgencyT_during", "frequencyT_during"]].dropna(), rowvar=False)
 if np.linalg.det(cov_matrix) == 0:
@@ -187,9 +186,11 @@ else:
 # Example: Find a match for a treated patient
 treated_patient = ds[ds["treatment_status"] == 1].iloc[5]  # Choose the first treated patient
 risk_set_for_treated = risk_set(treated_patient, ds)
-best_control_match = find_best_match(treated_patient, risk_set_for_treated, inv_cov_matrix)
+#best_control_match = find_best_match(treated_patient, risk_set_for_treated, inv_cov_matrix)
 
-print(risk_set_for_treated)
+first_key = list(risk_set_for_treated.keys())[0]  # Get the first key
+df = risk_set_for_treated[first_key]  # Extract the DataFrame
+print(df[["pain_baseline", "painB_tercile", "urgency_baseline", "urgencyB_tercile", "frequency_baseline", "frequencyB_tercile"]].head())
 
 
 
@@ -200,8 +201,8 @@ print(risk_set_for_treated)
 
 
 # Print the matched control patient
-if best_control_match is not None:
-    print("Matched Control Patient:")
-    print(best_control_match)
-else:
-    print(f"No suitable control found for treated patient {treated_patient['id']}")
+#if best_control_match is not None:
+    #print("Matched Control Patient:")
+    #print(best_control_match)
+#else:
+    #print(f"No suitable control found for treated patient {treated_patient['id']}")
