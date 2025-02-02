@@ -108,12 +108,14 @@ def risk_set(ds):
     for _, treated in treated_patients.iterrows():
         treated_id = treated["id"]
         treatment_time = treated["treatment_time"]
+        treated_sex = treated["sex"]
+        treated_age = treated["age"]
 
-        # Step 1: Define the Risk Set (all untreated patients up to time T)
+        # Step 1: Define the Risk Set (all untreated patients up to time T w the same sex as the treated patient)
         controls = ds[
             (ds["treatment_status"] == 0) | (ds["treatment_time"] > treatment_time)
         ]
-        controls = controls[controls["admitted_date"] <= treatment_time]
+        controls = controls[(controls["admitted_date"] <= treatment_time) & (controls["sex"] == treated_sex) & (abs(controls["age"] - treated["age"])<=5)]
 
         # Step 2: Store risk set (no filtering on terciles yet)
         risk_sets[treated_id] = controls
