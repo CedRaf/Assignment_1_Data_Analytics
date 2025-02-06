@@ -43,9 +43,9 @@ ds = pd.DataFrame({
     'treatment_time': treatment_time,
 
     # Baseline values (random normal distribution)
-    'pain_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 0, 9),
-    'urgency_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 0, 9),
-    'frequency_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 0, 9)
+    'pain_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 1, 9),
+    'urgency_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 1, 9),
+    'frequency_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 1, 9)
 })
 
 # Ensure all baseline values are non-negative
@@ -79,7 +79,7 @@ ds[['painT_during', 'urgencyT_during', 'frequencyT_during',
 
 def create_tercile(column):
     bins = [0, 3, 6, 9]  # Define bin edges
-    labels = [0, 1, 2]   # Assign tercile labels
+    labels = [0, 1, 10]   # Assign tercile labels
     return pd.cut(column, bins=bins, labels=labels, include_lowest=True)
 
 # Apply terciles for each symptom variable first
@@ -114,7 +114,6 @@ selected_columns = [
     'painT_tercile', 'urgencyT_tercile', 'frequencyT_tercile'
 ]
 
-
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 print(ds[selected_columns].head(10))
@@ -135,7 +134,7 @@ def risk_set(ds):
         controls = ds[
             (ds["treatment_status"] == 0) | (ds["treatment_time"] > treatment_time)
         ]
-        controls = controls[controls["admitted_date"] <= treatment_time]
+        controls = controls[(controls["admitted_date"] <= treatment_time) & (controls["sex"] == treated_sex) & (abs(controls["age"] - treated["age"])<=5)]
 
         # Step 2: Store risk set (no filtering on terciles yet)
         risk_sets[treated_id] = controls
@@ -176,28 +175,28 @@ risk_sets = risk_set(ds)
 
 # Match each treated patient with a control
 matched_pairs = {}
+matched_controls = set()  # This will store the IDs of matched controls
+
 for treated_id, risk in risk_sets.items():
     treated_patient = ds.loc[ds["id"] == treated_id].iloc[0]
-    matched_control = match_patients(treated_patient, risk, tercile_columns)
-    matched_pairs[treated_id] = matched_control
-
-
-
-
-def print_risk_sets(risk_sets):
-    for treated_id, controls in risk_sets.items():
-        print(f"Treated Patient ID: {treated_id}")
+    
+    # Filter out already matched controls
+    available_controls = risk[~risk['id'].isin(matched_controls)]
+    
+    if not available_controls.empty:
+        matched_control = match_patients(treated_patient, available_controls, tercile_columns)
         
-        # Print only the 'id' column of the controls risk set
-        control_ids = controls['id'] if not controls.empty else []
-        print("Risk Set (Control IDs):")
-        print(control_ids)
-        
-        print("\n" + "-"*50 + "\n")
+        if matched_control is not None:
+            # Add the matched control's ID to the set
+            matched_controls.add(matched_control['id'])
+            
+            # Store the matched pair (treated patient, matched control)
+            matched_pairs[treated_id] = (treated_patient, matched_control)
+
+# Print each matched pair in a more readable format
+for treated_id, matched_control in matched_pairs.items():
+    print(f"Treated ID: {treated_id}")
+    print(matched_control)
+    print("-" * 50)  # Separator between each matched pair
 
 
-# Assuming you've called risk_set(ds) to generate the risk_sets
-risk_sets = risk_set(ds)
-
-# Print the risk sets
-print_risk_sets(risk_sets)
