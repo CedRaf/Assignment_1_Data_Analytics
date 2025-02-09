@@ -48,6 +48,7 @@ ds = pd.DataFrame({
     'frequency_baseline': np.clip(np.round(np.random.normal(5, 3, n_samples)), 1, 9)
 })
 
+
 # Ensure all baseline values are non-negative
 ds[['pain_baseline', 'urgency_baseline', 'frequency_baseline']] = ds[['pain_baseline', 'urgency_baseline', 'frequency_baseline']].clip(lower=0)
 
@@ -92,10 +93,6 @@ selected_columns = [
     'painB_tercile', 'urgencyB_tercile', 'frequencyB_tercile',
     'painT_tercile', 'urgencyT_tercile', 'frequencyT_tercile'
 ]
-
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', None)
-# print(ds[selected_columns].head(10))
 
 def risk_set(ds):
     """Create risk sets of untreated patients for each treated patient."""
@@ -280,6 +277,7 @@ fig_frequency = px.box(frequency_melted,
 fig_urgency.show()
 fig_pain.show()
 fig_frequency.show()
+
 
 
 
