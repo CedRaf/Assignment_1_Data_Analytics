@@ -169,6 +169,18 @@ def match_patients(treated, risk_set, true_value_columns, regularization=1e-6):
 
 
 
+def apply_soft_matching(risk_set, treated_terciles, tercile_columns, min_matches=4):
+
+
+    # Count how many tercile values match for each control
+    risk_set = risk_set.copy()  # Create a full copy to avoid modifying a slice
+    risk_set.loc[:, "tercile_matches"] = (risk_set[tercile_columns] == treated_terciles).sum(axis=1)
+
+    # Keep only controls with at least `min_matches` tercile matches
+    filtered_risk_set = risk_set[risk_set["tercile_matches"] >= min_matches].copy()
+
+    return filtered_risk_set
+
 
 
 
@@ -182,6 +194,10 @@ true_value_columns = [
     "painT_during", "urgencyT_during", "frequencyT_during"
 ]
 
+
+
+
+
 # Get risk sets
 risk_sets = risk_set(ds)
 
@@ -191,13 +207,19 @@ matched_controls = set()  # Store IDs of matched controls
 
 for treated_id, risk in risk_sets.items():
     treated_patient = ds.loc[ds["id"] == treated_id].iloc[0]
-    
+
+    # Extract tercile values of the treated patient
+    treated_terciles = treated_patient[tercile_columns]  
+
     # Filter out already matched controls
     available_controls = risk[~risk['id'].isin(matched_controls)]
-    
-    if not available_controls.empty:
-        matched_control = match_patients(treated_patient, available_controls, true_value_columns)
-        
+
+    # Apply soft matching with stepwise relaxation
+    filtered_risk_set = apply_soft_matching(available_controls, treated_terciles, tercile_columns, min_matches=3)
+
+    if not filtered_risk_set.empty:
+        matched_control = match_patients(treated_patient, filtered_risk_set, true_value_columns)
+
         if matched_control is not None:
             matched_controls.add(matched_control['id'])
             matched_pairs[treated_id] = (treated_patient, matched_control)
@@ -228,9 +250,9 @@ for treated_id, (treated_patient, matched_control) in matched_pairs.items():
 matched_df = pd.DataFrame(matched_data)
 
 # Export the DataFrame to a CSV file
-matched_df.to_csv('matched_pairs.csv', index=False)
+matched_df.to_csv('softmatched_pairs.csv', index=False)
 
-print("Matched pairs exported to 'matched_pairs.csv'")
+print("Matched pairs exported to 'softmatched_pairs.csv'")
 
 
 
