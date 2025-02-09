@@ -70,7 +70,6 @@ ds[['painT_during', 'urgencyT_during', 'frequencyT_during',
         'painT_3months', 'urgencyT_3months', 'frequency_3months',
         'painT_6months', 'urgencyT_6months', 'frequency_6months']].clip(lower=0).round()
 
-
 def create_tercile(column):
     bins = [0, 3, 6, 9]  # Define bin edges
     labels = [0, 1, 2]   # Assign tercile labels
@@ -83,7 +82,6 @@ ds["frequencyB_tercile"] = create_tercile(ds["frequency_baseline"])
 ds["painT_tercile"] = create_tercile(ds["painT_during"])
 ds["urgencyT_tercile"] = create_tercile(ds["urgencyT_during"])
 ds["frequencyT_tercile"] = create_tercile(ds["frequencyT_during"])
-
 
 selected_columns = [
     'id', 'pain_baseline', 'urgency_baseline', 'frequency_baseline',
@@ -115,7 +113,7 @@ def risk_set(ds):
         controls = ds[
             (ds["treatment_status"] == 0) | (ds["treatment_time"] > treatment_time)
         ]
-        controls = controls[(controls["admitted_date"] <= treatment_time) & (controls["sex"] == treated_sex) & (abs(controls["age"] - treated["age"])<=5)]
+        controls = controls[(controls["admitted_date"] <= treatment_time)]
 
         # Step 2: Store risk set (no filtering on terciles yet)
         risk_sets[treated_id] = controls
@@ -162,7 +160,6 @@ def match_patients(treated, risk_set, tercile_columns):
         return None
 
 
-
 # Define tercile-based binary variable columns
 tercile_columns = [
     "painB_tercile", "urgencyB_tercile", "frequencyB_tercile",
@@ -174,15 +171,28 @@ risk_sets = risk_set(ds)
 
 # Match each treated patient with a control
 matched_pairs = {}
+matched_controls = set()
 for treated_id, risk in risk_sets.items():
-    treated_patient = ds.loc[ds["id"] == treated_id].iloc[0]
-    matched_control = match_patients(treated_patient, risk, tercile_columns)
-    matched_pairs[treated_id] = matched_control
+    treated_patient = ds.loc[ds["id"] == treated_id]
+    
+    # Filter out already matched controls
+    available_controls = risk[~risk['id'].isin(matched_controls)]
+    
+    if not available_controls.empty:
+        matched_control = match_patients(treated_patient, available_controls, tercile_columns)
+        
+        if matched_control is not None:
+            # Add the matched control's ID to the set
+            matched_controls.add(matched_control['id'])
+            
+            # Store the matched pair (treated patient, matched control)
+            matched_pairs[treated_id] = (treated_patient, matched_control)
 
 # Print each matched pair in a more readable format
 for treated_id, matched_control in matched_pairs.items():
     print(f"Treated ID: {treated_id}")
     print(matched_control)
     print("-" * 50)  # Separator between each matched pair
+
 
 
