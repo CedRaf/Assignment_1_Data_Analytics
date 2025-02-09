@@ -3,7 +3,7 @@ import pandas as pd
 from dateutil.relativedelta import relativedelta
 from scipy.spatial.distance import mahalanobis
 from scipy.stats import zscore
-from numpy.linalg import inv
+from numpy.linalg import pinv, LinAlgError
 
 
 
@@ -79,7 +79,7 @@ ds[['painT_during', 'urgencyT_during', 'frequencyT_during',
 
 def create_tercile(column):
     bins = [0, 3, 6, 9]  # Define bin edges
-    labels = [0, 1, 10]   # Assign tercile labels
+    labels = [0, 1, 2]   # Assign tercile labels
     return pd.cut(column, bins=bins, labels=labels, include_lowest=True)
 
 # Apply terciles for each symptom variable first
@@ -90,23 +90,6 @@ ds["painT_tercile"] = create_tercile(ds["painT_during"])
 ds["urgencyT_tercile"] = create_tercile(ds["urgencyT_during"])
 ds["frequencyT_tercile"] = create_tercile(ds["frequencyT_during"])
 
-
-def create_tercile_binaries(df, column_name):
-    """Create binary variables for each tercile (low, middle, high)."""
-    df[f"{column_name}_tercile_1"] = (df[column_name] == 0).astype(int)
-    df[f"{column_name}_tercile_2"] = (df[column_name] == 1).astype(int)
-    df[f"{column_name}_tercile_3"] = (df[column_name] == 2).astype(int)
-    return df
-
-# Apply the binary terciles for each symptom variable
-ds = create_tercile_binaries(ds, "painB_tercile")
-ds = create_tercile_binaries(ds, "urgencyB_tercile")
-ds = create_tercile_binaries(ds, "frequencyB_tercile")
-ds = create_tercile_binaries(ds, "painT_tercile")
-ds = create_tercile_binaries(ds, "urgencyT_tercile")
-ds = create_tercile_binaries(ds, "frequencyT_tercile")
-
-
 selected_columns = [
     'id', 'pain_baseline', 'urgency_baseline', 'frequency_baseline',
     'painT_during', 'urgencyT_during', 'frequencyT_during',
@@ -116,7 +99,7 @@ selected_columns = [
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
-print(ds[selected_columns].head(10))
+# print(ds[selected_columns].head(10))
 
 def risk_set(ds):
     """Create risk sets of untreated patients for each treated patient."""
@@ -134,7 +117,7 @@ def risk_set(ds):
         controls = ds[
             (ds["treatment_status"] == 0) | (ds["treatment_time"] > treatment_time)
         ]
-        controls = controls[(controls["admitted_date"] <= treatment_time) & (controls["sex"] == treated_sex) & (abs(controls["age"] - treated["age"])<=5)]
+        controls = controls[(controls["admitted_date"] <= treatment_time) & (abs(controls["age"] - treated["age"])<=5)]
 
         # Step 2: Store risk set (no filtering on terciles yet)
         risk_sets[treated_id] = controls
@@ -142,25 +125,50 @@ def risk_set(ds):
     return risk_sets
 
 
-def match_patients(treated, risk_set, tercile_columns):
-    """Find the best match for a treated patient using Mahalanobis distance and balanced terciles."""
+def match_patients(treated, risk_set, true_value_columns, regularization=1e-6):
+    """Find the best match for a treated patient using Mahalanobis distance and balanced true values."""
     
-    # Extract treated patient's tercile values
-    treated_terciles = treated[tercile_columns].values.reshape(1, -1)
+    # Extract treated patient's true values
+    treated_values = treated[true_value_columns].values.reshape(1, -1)
 
-    # Compute Mahalanobis distance for each control in the risk set
-    cov_matrix = np.cov(risk_set[tercile_columns].T)  # Covariance matrix
-    inv_cov_matrix = inv(cov_matrix)  # Inverse covariance
+    # Drop NaN values from the risk set
+    risk_set_clean = risk_set[true_value_columns].dropna()
 
-    # Calculate distances for each control
-    distances = risk_set.apply(
-        lambda row: mahalanobis(row[tercile_columns].values, treated_terciles, inv_cov_matrix), 
+    # Ensure risk set is not empty after dropping NaNs
+    if risk_set_clean.shape[0] < 2:
+        return None  # Not enough data for covariance computation
+
+    # Ensure numeric conversion
+    risk_set_clean = risk_set_clean.astype(float)
+
+    # Compute covariance matrix
+    cov_matrix = np.cov(risk_set_clean.T)
+
+    # Check if covariance matrix is singular
+    if np.linalg.matrix_rank(cov_matrix) < len(true_value_columns):
+        print("Warning: Singular covariance matrix detected, applying regularization.")
+        cov_matrix += np.eye(len(true_value_columns)) * regularization  # Regularization
+
+    try:
+        inv_cov_matrix = pinv(cov_matrix)  # Use pseudoinverse for stability
+    except LinAlgError:
+        print("Error: Covariance matrix inversion failed.")
+        return None  # Skip this patient
+
+    # Calculate Mahalanobis distances for each control
+    distances = risk_set_clean.apply(
+        lambda row: mahalanobis(row.values, treated_values.flatten(), inv_cov_matrix), 
         axis=1
     )
 
     # Select the closest match
-    best_match = risk_set.iloc[distances.idxmin()]
+    best_match_index = distances.idxmin()
+    best_match = risk_set.loc[best_match_index]  # Get full row from original `risk_set`
+    
     return best_match
+
+
+
 
 
 
@@ -169,13 +177,17 @@ tercile_columns = [
     "painB_tercile", "urgencyB_tercile", "frequencyB_tercile",
     "painT_tercile", "urgencyT_tercile", "frequencyT_tercile"
 ]
+true_value_columns = [
+    "pain_baseline", "urgency_baseline", "frequency_baseline",
+    "painT_during", "urgencyT_during", "frequencyT_during"
+]
 
 # Get risk sets
 risk_sets = risk_set(ds)
 
 # Match each treated patient with a control
 matched_pairs = {}
-matched_controls = set()  # This will store the IDs of matched controls
+matched_controls = set()  # Store IDs of matched controls
 
 for treated_id, risk in risk_sets.items():
     treated_patient = ds.loc[ds["id"] == treated_id].iloc[0]
@@ -184,19 +196,41 @@ for treated_id, risk in risk_sets.items():
     available_controls = risk[~risk['id'].isin(matched_controls)]
     
     if not available_controls.empty:
-        matched_control = match_patients(treated_patient, available_controls, tercile_columns)
+        matched_control = match_patients(treated_patient, available_controls, true_value_columns)
         
         if matched_control is not None:
-            # Add the matched control's ID to the set
             matched_controls.add(matched_control['id'])
-            
-            # Store the matched pair (treated patient, matched control)
             matched_pairs[treated_id] = (treated_patient, matched_control)
 
-# Print each matched pair in a more readable format
-for treated_id, matched_control in matched_pairs.items():
-    print(f"Treated ID: {treated_id}")
-    print(matched_control)
-    print("-" * 50)  # Separator between each matched pair
+
+
+
+
+
+# # Create a list to store the matched pairs
+matched_data = []
+
+# Iterate through the matched pairs and store them in the list
+for treated_id, (treated_patient, matched_control) in matched_pairs.items():
+    # Create a dictionary for the treated patient
+    treated_dict = treated_patient.to_dict()
+    treated_dict['type'] = 'treated'  # Add a column to indicate this is a treated patient
+    
+    # Create a dictionary for the matched control
+    control_dict = matched_control.to_dict()
+    control_dict['type'] = 'control'  # Add a column to indicate this is a control patient
+    
+    # Append both to the list
+    matched_data.append(treated_dict)
+    matched_data.append(control_dict)
+
+# Convert the list of dictionaries to a DataFrame
+matched_df = pd.DataFrame(matched_data)
+
+# Export the DataFrame to a CSV file
+matched_df.to_csv('matched_pairs.csv', index=False)
+
+print("Matched pairs exported to 'matched_pairs.csv'")
+
 
 
